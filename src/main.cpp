@@ -22,15 +22,17 @@
 
 #include <time.h>
 
+#define MY_TZ "CET-1CEST,M3.5.0,M10.5.0/3"
 #define SD_CS 5
 #define ONE_WIRE_BUS 21
 
 //bestemmelse af tid
 struct tm timeinfo;
 // 
-IPAddress dns(8,8,8,8);
-WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP);
+IPAddress dns(8,8,8,8); //potentially in use
+//WiFiUDP ntpUDP; //not in use
+//NTPClient timeClient(ntpUDP); // kunne ikke bruges
+
 
 // Define deep sleep options
 uint64_t uS_TO_S_FACTOR = 1000000;  // Conversion factor for micro seconds to seconds
@@ -42,6 +44,8 @@ OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
 // Create AsyncWebServer object on port 80
 AsyncWebServer server(80);
+
+int C_loop = 0;
 
 // Search for parameter in HTTP POST request
 const char* PARAM_INPUT_1 = "ssid";
@@ -64,7 +68,7 @@ String dataMessage;
 float temperature;
 
 void writeFile(fs::FS &fs, const char * path, const char * message);
-void appendFile(fs::FS &fs, const char * path, const char * message);
+void appendFile();
 void getTimeStamp();
 void logSDCard();
 
@@ -89,6 +93,12 @@ const long interval = 1000;  // interval to wait for Wi-Fi connection (milliseco
 // Save Reading number on RTC memory
 RTC_DATA_ATTR int readingID = 0;
 
+// NTP server to request epoch time
+const char* ntpServer = "pool.ntp.org";
+
+// Variable to save current epoch time
+unsigned long epochTime; 
+
 String readDSTemperatureC() {
   // Call sensors.requestTemperatures() to issue a global temperature and Requests to all devices on the bus
   sensors.requestTemperatures(); 
@@ -103,6 +113,21 @@ String readDSTemperatureC() {
   }
   return String(temperature);
 }
+
+
+
+// Function that gets current epoch time
+unsigned long getTime() {
+  time_t now;
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    //Serial.println("Failed to obtain time");
+    return(0);
+  }
+  time(&now);
+  return now;
+}
+
 // Initialize SPIFFS
 void initSPIFFS() {
   if (!SPIFFS.begin(true)) {
@@ -269,8 +294,8 @@ void setup() {
     });
     server.begin();
   }
-  timeClient.begin();
-  timeClient.setTimeOffset(3600);
+  // timeClient.begin();
+  // timeClient.setTimeOffset(3600);
   // Initialize SD card
   SD.begin(SD_CS);  
   if(!SD.begin(SD_CS)) {
@@ -300,23 +325,28 @@ void setup() {
   }
   file.close();
 
-   esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR); //resetter eps32
+  //esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR); //resetter eps32
 
   sensors.begin();
-  readDSTemperatureC();
-  // // //getTimeStamp();// kan ikke bruges
-  logSDCard();
-  readingID++;
+  // readDSTemperatureC();
+  // // // //getTimeStamp();// kan ikke bruges
+  // logSDCard();
+  // readingID++;
 
   // // Start deep sleep
   
-  Serial.println("DONE! Going to sleep now.");
-  esp_deep_sleep_start(); 
+  //Serial.println("DONE! Going to sleep now.");
+  //esp_deep_sleep_start(); 
 
 }
 
 void loop() {
-
+  delay(10000);
+  Serial.println(C_loop);
+  C_loop++;
+  readDSTemperatureC();
+  logSDCard();
+  readingID++;
 }
 
 #pragma region //SD Card
