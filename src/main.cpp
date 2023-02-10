@@ -1,21 +1,14 @@
-/*********
-  Rui Santos
-  Complete instructions at https://RandomNerdTutorials.com/esp32-wi-fi-manager-asyncwebserver/
-  
-  Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files.
-  The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-*********/
 #include <Arduino.h>
-#include <WiFi.h>
 #include <ESPAsyncWebServer.h>
-#include <AsyncTCP.h>
 #include "SPIFFS.h"
 #include <OneWire.h>
 #include <DallasTemperature.h>
-#include <ArduinoJson.h>
+#include <AsyncTCP.h>
+#include <WiFi.h>
 #include <WiFiUdp.h>
 #include <NTPClient.h>
-// Libraries for SD card
+// #include <ArduinoJson.h> // nået ikke at blive anvendt
+//  Libraries for SD card
 #include <FS.h>
 #include "SD.h"
 #include <SPI.h>
@@ -26,153 +19,146 @@
 #define SD_CS 5
 #define ONE_WIRE_BUS 21
 
-//bestemmelse af tid
-struct tm timeinfo;
-// 
-IPAddress dns(8,8,8,8); //potentially in use
-//WiFiUDP ntpUDP; //not in use
-//NTPClient timeClient(ntpUDP); // kunne ikke bruges
+// bestemmelse af tid
+//struct tm timeinfo;
 
-
-// Define deep sleep options
-uint64_t uS_TO_S_FACTOR = 1000000;  // Conversion factor for micro seconds to seconds
-// Sleep for 10 minutes = 600 seconds
-uint64_t TIME_TO_SLEEP = 30;
+//NTP - Network time protocol
+//that requests time data from an NTP server
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP);
 
 OneWire oneWire(ONE_WIRE_BUS);
-// Pass our oneWire reference to Dallas Temperature sensor 
+// Pass our oneWire reference to Dallas Temperature sensor
 DallasTemperature sensors(&oneWire);
 // Create AsyncWebServer object on port 80
 AsyncWebServer server(80);
 
-int C_loop = 0;
-
 // Search for parameter in HTTP POST request
-const char* PARAM_INPUT_1 = "ssid";
-const char* PARAM_INPUT_2 = "pass";
-const char* PARAM_INPUT_3 = "ip";
-const char* PARAM_INPUT_4 = "gateway";
+const char *PARAM_INPUT_1 = "ssid";
+const char *PARAM_INPUT_2 = "pass";
+const char *PARAM_INPUT_3 = "ip";
+const char *PARAM_INPUT_4 = "gateway";
 
-// Variables for Datetime or EPOCH not sure
+// Variables for Datetime or EPOCH
 String formattedDate;
 String dayStamp;
 String timeStamp;
 
-//Variables to save values from HTML form
+//data message is going to be used for collecting all the variables of Datetime
+String dataMessage;
+float temperature;
+// Variables to save values from HTML form
 String ssid;
 String pass;
 String ip;
 String gateway;
 
-String dataMessage;
-float temperature;
 
-void writeFile(fs::FS &fs, const char * path, const char * message);
+// The different functions that are in need of prototyping
+void writeFile(fs::FS &fs, const char *path, const char *message);
 void appendFile();
 void getTimeStamp();
 void logSDCard();
 
 // File paths to save input values permanently
-const char* ssidPath = "/ssid.txt";
-const char* passPath = "/pass.txt";
-const char* ipPath = "/ip.txt";
-const char* gatewayPath = "/gateway.txt";
+const char *ssidPath = "/ssid.txt";
+const char *passPath = "/pass.txt";
+const char *ipPath = "/ip.txt";
+const char *gatewayPath = "/gateway.txt";
 
+// the static wifi credentials we use for acquiring date time
 IPAddress localIP;
-//IPAddress localIP(192, 168, 1, 200); // hardcoded // Har vi bare brugt vores egen
-
-// Set your Gateway IP address
 IPAddress localGateway;
-//IPAddress localGateway(192, 168, 1, 1); //hardcoded //Det vi bruger er E308 192.168.0.1
 IPAddress subnet(255, 255, 0, 0);
+IPAddress dns(8, 8, 8, 8);
 
 // Timer variables
 unsigned long previousMillis = 0;
-const long interval = 1000;  // interval to wait for Wi-Fi connection (milliseconds)
+const long interval = 1000; // interval to wait for Wi-Fi connection (milliseconds)
 
 // Save Reading number on RTC memory
 RTC_DATA_ATTR int readingID = 0;
 
 // NTP server to request epoch time
-const char* ntpServer = "pool.ntp.org";
+const char *ntpServer = "pool.ntp.org";
 
-// Variable to save current epoch time
-unsigned long epochTime; 
-
-String readDSTemperatureC() {
+String readDSTemperatureC()
+{
   // Call sensors.requestTemperatures() to issue a global temperature and Requests to all devices on the bus
-  sensors.requestTemperatures(); 
+  sensors.requestTemperatures();
   temperature = sensors.getTempCByIndex(0);
 
-  if(temperature == -127.00) {
+  if (temperature == -127.00)
+  {
     Serial.println("Failed to read from DS18B20 sensor");
     return "--";
-  } else {
+  }
+  else
+  {
     Serial.print("Temperature Celsius: ");
-    Serial.println(temperature); 
+    Serial.println(temperature);
   }
   return String(temperature);
 }
 
 
-
-// Function that gets current epoch time
-unsigned long getTime() {
-  time_t now;
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) {
-    //Serial.println("Failed to obtain time");
-    return(0);
-  }
-  time(&now);
-  return now;
-}
-
 // Initialize SPIFFS
-void initSPIFFS() {
-  if (!SPIFFS.begin(true)) {
+void initSPIFFS()
+{
+  if (!SPIFFS.begin(true))
+  {
     Serial.println("An error has occurred while mounting SPIFFS");
   }
   Serial.println("SPIFFS mounted successfully");
 }
 
 // Read File from SPIFFS
-String readFile(fs::FS &fs, const char * path){
+String readFile(fs::FS &fs, const char *path)
+{
   Serial.printf("Reading file: %s\r\n", path);
 
   File file = fs.open(path);
-  if(!file || file.isDirectory()){
+  if (!file || file.isDirectory())
+  {
     Serial.println("- failed to open file for reading");
     return String();
   }
-  
+
   String fileContent;
-  while(file.available()){
+  while (file.available())
+  {
     fileContent = file.readStringUntil('\n');
-    break;     
+    break;
   }
   return fileContent;
 }
 
-// Write file to SPIFFS - Wifi connection
-void writeToSPIFFS_File(fs::FS &fs, const char * path, const char * message){
+// Write file to SPIFFS
+void writeToSPIFFS_File(fs::FS &fs, const char *path, const char *message)
+{
   Serial.printf("Writing file: %s\r\n", path);
 
   File file = fs.open(path, FILE_WRITE);
-  if(!file){
+  if (!file)
+  {
     Serial.println("- failed to open file for writing");
     return;
   }
-  if(file.print(message)){
+  if (file.print(message))
+  {
     Serial.println("- file written");
-  } else {
+  }
+  else
+  {
     Serial.println("- frite failed");
   }
 }
 
-// Initialize WiFi
-bool initWiFi() {
-  if(ssid=="" || ip==""){
+// Initialize WiFi - is used to check if the wifi credentials are correctly filled out
+bool initWiFi()
+{
+  if (ssid == "" || ip == "")
+  {
     Serial.println("Undefined SSID or IP address.");
     return false;
   }
@@ -181,8 +167,8 @@ bool initWiFi() {
   localIP.fromString(ip.c_str());
   localGateway.fromString(gateway.c_str());
 
-
-  if (!WiFi.config(localIP, localGateway, subnet)){
+  if (!WiFi.config(localIP, localGateway, subnet, dns))
+  {
     Serial.println("STA Failed to configure");
     return false;
   }
@@ -192,9 +178,11 @@ bool initWiFi() {
   unsigned long currentMillis = millis();
   previousMillis = currentMillis;
 
-  while(WiFi.status() != WL_CONNECTED) {
+  while (WiFi.status() != WL_CONNECTED)
+  {
     currentMillis = millis();
-    if (currentMillis - previousMillis >= interval) {
+    if (currentMillis - previousMillis >= interval)
+    {
       Serial.println("Failed to connect.");
       return false;
     }
@@ -204,34 +192,55 @@ bool initWiFi() {
   return true;
 }
 
-void setup() {
-  // Serial port for debugging purposes
-  Serial.begin(115200);
-  //Serial.println("hello world");
+/// TimeStamp
+void getTimeStamp() {
+  while(!timeClient.update()) {
+    timeClient.forceUpdate();
+  }
+  // The formattedDate comes with the following format:
+  // 2018-05-28T16:00:13Z
+  // We need to extract date and time
+  formattedDate = timeClient.getFormattedDate();
+  Serial.println(formattedDate);
 
+  // Extract date
+  int splitT = formattedDate.indexOf("T");
+  dayStamp = formattedDate.substring(0, splitT);
+  Serial.println(dayStamp);
+  // Extract time
+  timeStamp = formattedDate.substring(splitT+1, formattedDate.length()-1);
+  Serial.println(timeStamp);
+}
+
+
+
+void setup()
+{
+  Serial.begin(115200);
   initSPIFFS();
 
   // Load values saved in SPIFFS
   ssid = readFile(SPIFFS, ssidPath);
   pass = readFile(SPIFFS, passPath);
   ip = readFile(SPIFFS, ipPath);
-  gateway = readFile (SPIFFS, gatewayPath);
+  gateway = readFile(SPIFFS, gatewayPath);
   Serial.println(ssid);
   Serial.println(pass);
   Serial.println(ip);
   Serial.println(gateway);
-  
-  if(initWiFi()) {
-// Route for root / web page
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send(SPIFFS, "/index.html");
-  });
-  server.on("/temperature", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send_P(200, "text/plain", readDSTemperatureC().c_str());
-  });
+
+  //checks if user is connected to wifi or it needs to run through website setup(wifi-manager)
+  if (initWiFi())
+  {
+    // Route for root / web page
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
+              { request->send(SPIFFS, "/index.html"); });
+    server.on("/temperature", HTTP_GET, [](AsyncWebServerRequest *request)
+              { request->send_P(200, "text/plain", readDSTemperatureC().c_str()); });
     server.begin();
   }
-  else {
+  else
+  {
     // Connect to Wi-Fi network with SSID and password
     Serial.println("Setting AP (Access Point)");
     // NULL sets an open Access Point
@@ -239,16 +248,16 @@ void setup() {
 
     IPAddress IP = WiFi.softAPIP();
     Serial.print("AP IP address: ");
-    Serial.println(IP); 
+    Serial.println(IP);
 
     // Web Server Root URL
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-      request->send(SPIFFS, "/wifimanager.html", "text/html");
-    });
-    
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
+              { request->send(SPIFFS, "/wifimanager.html", "text/html"); });
+
     server.serveStatic("/", SPIFFS, "/");
-    
-    server.on("/", HTTP_POST, [](AsyncWebServerRequest *request) {
+
+    server.on("/", HTTP_POST, [](AsyncWebServerRequest *request)
+              {
       int params = request->params();
       for(int i=0;i<params;i++){
         AsyncWebParameter* p = request->getParam(i);
@@ -290,109 +299,109 @@ void setup() {
       }
       request->send(200, "text/plain", "Done. ESP will restart, connect to your router and go to IP address: " + ip);
       delay(3000);
-      ESP.restart();
-    });
+      ESP.restart(); });
     server.begin();
   }
-  // timeClient.begin();
-  // timeClient.setTimeOffset(3600);
-  // Initialize SD card
-  SD.begin(SD_CS);  
-  if(!SD.begin(SD_CS)) {
+
+  // Initialize SD card or register sd card
+  SD.begin(SD_CS);
+  if (!SD.begin(SD_CS))
+  {
     Serial.println("Card Mount Failed");
     return;
   }
   uint8_t cardType = SD.cardType();
-  if(cardType == CARD_NONE) {
+  if (cardType == CARD_NONE)
+  {
     Serial.println("No SD card attached");
     return;
   }
   Serial.println("Initializing SD card...");
-  if (!SD.begin(SD_CS)) {
+  if (!SD.begin(SD_CS))
+  {
     Serial.println("ERROR - SD card initialization failed!");
-    return;    // init failed
+    return; // init failed
   }
   // If the data.txt file doesn't exist
   // Create a file on the SD card and write the data labels
   File file = SD.open("/data.txt");
-  if(!file) {
+  if (!file)
+  {
     Serial.println("File doens't exist");
     Serial.println("Creating file...");
     writeFile(SD, "/data.txt", "Reading ID, Date, Hour, Temperature \r\n");
   }
-  else {
-    Serial.println("File already exists");  
+  else
+  {
+    Serial.println("File already exists");
   }
   file.close();
-
-  //esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR); //resetter eps32
-
   sensors.begin();
-  // readDSTemperatureC();
-  // // // //getTimeStamp();// kan ikke bruges
-  // logSDCard();
-  // readingID++;
-
-  // // Start deep sleep
-  
-  //Serial.println("DONE! Going to sleep now.");
-  //esp_deep_sleep_start(); 
-
 }
 
-void loop() {
+void loop()
+{
   delay(10000);
-  Serial.println(C_loop);
-  C_loop++;
   readDSTemperatureC();
+  getTimeStamp();
   logSDCard();
   readingID++;
 }
 
-#pragma region //SD Card
+#pragma region // SD Card
 // Function to get date and time from NTPClient
-
-// Write to the SD card (DON'T MODIFY THIS FUNCTION)
-void writeFile(fs::FS &fs, const char * path, const char * message) {
+// Write to the SD card
+void writeFile(fs::FS &fs, const char *path, const char *message)
+{
   Serial.printf("Writing file: %s\n", path);
 
   File file = fs.open(path, FILE_WRITE);
-  if(!file) {
+  if (!file)
+  {
     Serial.println("Failed to open file for writing");
     return;
   }
-  if(file.print(message)) {
+  if (file.print(message))
+  {
     Serial.println("File written");
-  } else {
+  }
+  else
+  {
     Serial.println("Write failed");
   }
   file.close();
 }
 
-// Append data to the SD card (DON'T MODIFY THIS FUNCTION)
-void appendFile(fs::FS &fs, const char * path, const char * message) {
+// Append data to the SD card
+void appendFile(fs::FS &fs, const char *path, const char *message)
+{
   Serial.printf("Appending to file: %s\n", path);
 
   File file = fs.open(path, FILE_APPEND);
-  if(!file) {
+  if (!file)
+  {
     Serial.println("Failed to open file for appending");
     return;
   }
-  if(file.print(message)) {
+  if (file.print(message))
+  {
     Serial.println("Message appended");
-  } else {
+  }
+  else
+  {
     Serial.println("Append failed");
   }
   file.close();
 }
 
 // Write the sensor readings on the SD card
-void logSDCard() {
-  dataMessage = String(readingID) + "," + String(dayStamp) + "," + String(timeStamp) + "," + 
+void logSDCard()
+{
+  dataMessage = String(readingID) + "," + String(dayStamp) + "," + String(timeStamp) + "," +
                 String(temperature) + "\r\n";
   Serial.print("Save data: ");
   Serial.println(dataMessage);
   appendFile(SD, "/data.txt", dataMessage.c_str());
 }
 
-#pragma endregion //SD Card
+#pragma endregion // SD Card
